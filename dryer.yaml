@@ -62,7 +62,7 @@ sensor:
             }
 
   - platform: dallas_temp
-    address: 0x32
+    address: 0x32 #todo: add real address
     name: "Drying Temperature"
     id: drying_temp_sensor
     on_value:
