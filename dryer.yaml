@@ -20,8 +20,8 @@ ota:
     password: "b0602654baa82a91f124180a782e9626"
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  ssid: "makerspace.lt"
+  password: "100 decibelu"
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
@@ -43,8 +43,8 @@ one_wire:
 sensor:
   - platform: hx711
     name: "Load Cell Weight"
-    dout_pin: 13
-    clk_pin: 12
+    dout_pin: 19  # Changed from 13
+    clk_pin: 21    # Changed from 14
     gain: 64
     id: load_cell
     filters:
@@ -62,7 +62,7 @@ sensor:
             }
 
   - platform: dallas_temp
-    address: 0x32 #todo: add real address
+    #address: 0x32 #todo: add real address
     name: "Drying Temperature"
     id: drying_temp_sensor
     on_value:
@@ -88,7 +88,7 @@ switch:
     restore_mode: ALWAYS_OFF
 
   - platform: gpio
-    pin: 2
+    pin: 22
     id: blender
     name: "Blender"
     restore_mode: ALWAYS_OFF
