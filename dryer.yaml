@@ -40,17 +40,20 @@ one_wire:
   platform: gpio
   pin: 32
 
+
+
 sensor:
   - platform: hx711
     name: "Load Cell Weight"
-    dout_pin: 19  # Changed from 13
-    clk_pin: 21    # Changed from 14
-    gain: 64
+    dout_pin: 13  # Changed from 13
+    clk_pin: 12    # Changed from 14
+    gain: 128
+    update_interval: 5s
     id: load_cell
     filters:
-      - median:
-          window_size: 5
-          send_every: 5
+      - calibrate_linear:
+        - 35000 -> 0
+        - 450000 -> 1000.0 
     on_value:
       then:
         - lambda: |
@@ -58,7 +61,6 @@ sensor:
               id(heat).turn_off();
               id(drying_fan).turn_off();
               id(blender).turn_off();
-              ESP.restart();
             }
 
   - platform: dallas_temp
@@ -93,6 +95,14 @@ switch:
     name: "Blender"
     restore_mode: ALWAYS_OFF
 
+  - platform: template
+    name: "Move Conveyor"
+    turn_on_action:
+      - stepper.set_target:
+          id: conveyor_motor
+          target: 1000
+
+
 stepper:
   - platform: a4988
     id: conveyor_motor
@@ -106,7 +116,7 @@ number:
     id: target_weight
     optimistic: true
     min_value: 1
-    max_value: 1000
+    max_value: 10000000
     step: 1
 
   - platform: template
