@@ -13,68 +13,147 @@ logger:
 # Enable Home Assistant API
 api:
   encryption:
-    key: "nMD4QOr8CXAp1r7+cFPRCRaKc2N+cenXeGbsgXcpxBE="
+    key: "nMD4QOr8CXAp1r7+cFPRCRaKc2N+cenXeGbsgXcpxBE=" # Replace with your key
 
 ota:
   - platform: esphome
-    password: "b0602654baa82a91f124180a782e9626"
+    password: "b0602654baa82a91f124180a782e9626" # Replace with your password
 
 wifi:
-  ssid: "makerspace.lt"
-  password: "100 decibelu"
+  ssid: "makerspace.lt" # Replace with your SSID
+  password: "100 decibelu" # Replace with your WiFi password
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: "Dryer Fallback Hotspot"
-    password: "vBQJlP5mWUU0"
+    password: "vBQJlP5mWUU0" # Replace with your AP password
 
 web_server:
   port: 80
   ota: false
-  version: 3
+  version: 3 # Use version 2 if version 3 causes issues
   local: true
 
 captive_portal:
+
+# Global variable to track if the process has finished
+globals:
+  - id: is_finished
+    type: bool
+    restore_value: yes # Keep state after reboot if it finished
+    initial_value: 'false'
+  - id: is_ready_to_run # Track if temp is high enough
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
 one_wire:
   platform: gpio
   pin: 32
 
-
-
 sensor:
   - platform: hx711
     name: "Load Cell Weight"
-    dout_pin: 13  # Changed from 13
-    clk_pin: 12    # Changed from 14
-    gain: 128
-    update_interval: 5s
     id: load_cell
+    dout_pin: 13
+    clk_pin: 12
+    gain: 128
+    update_interval: 1s # Update more frequently for averaging
     filters:
+      # Approximate Arduino's averageWeight calculation
+      - sliding_window_moving_average:
+          window_size: 40
+          send_every: 1 # Send average on every new reading
       - calibrate_linear:
-        - 35000 -> 0
-        - 450000 -> 1000.0 
+          # Map raw ADC readings to grams (adjust these based on your calibration)
+          # Example: 0g -> raw reading A, 1000g -> raw reading B
+          - 35000 -> 0.0   # Example raw reading for 0 grams
+          - 450000 -> 1000.0 # Example raw reading for 1000 grams
     on_value:
       then:
-        - lambda: |
-            if (id(load_cell).state > id(target_weight).state) {
-              id(heat).turn_off();
-              id(drying_fan).turn_off();
-              id(blender).turn_off();
-            }
+        # Check finish condition
+        - if:
+            condition:
+              # Check weight AND that we haven't already finished
+              and:
+                - lambda: 'return id(load_cell).state > id(target_weight).state;'
+                - lambda: 'return !id(is_finished);'
+            then:
+              - logger.log: "Target weight reached. Finishing process."
+              - globals.set:
+                  id: is_finished
+                  value: 'true'
+              - globals.set: # Stop trying to run
+                  id: is_ready_to_run
+                  value: 'false'
+              # Stop all outputs immediately
+              - switch.turn_off: heat
+              - switch.turn_off: drying_fan
+              - switch.turn_off: blender
+              - stepper.set_target: # Stop conveyor motor
+                  id: conveyor_motor
+                  target: !lambda 'return id(conveyor_motor).current_position;'
+              # Execute the finish sequence script
+              - script.execute: finish_sequence
 
   - platform: dallas_temp
-    #address: 0x32 #todo: add real address
+    # address: 0x???????????????? # Optional: specify sensor address if multiple sensors
     name: "Drying Temperature"
     id: drying_temp_sensor
+    update_interval: 5s # Check temp every 5 seconds
     on_value:
       then:
-        - lambda: |
-            if (id(drying_temp_sensor).state < id(drying_temp).state + 1) {
-              id(heat).turn_on();
-            } else {
-              id(heat).turn_off();
-            }
+        # Heating control (simple thermostat)
+        - if:
+            condition:
+              lambda: 'return id(drying_temp_sensor).state < id(drying_temp).state + 1;'
+            then:
+              - switch.turn_on: heat
+            else:
+              - switch.turn_off: heat
+
+        # Check if conditions are met to run the process
+        - if:
+            condition:
+              # Must NOT be finished AND temp must be >= target
+              and:
+                - lambda: 'return !id(is_finished);'
+                - lambda: 'return id(drying_temp_sensor).state >= id(drying_temp).state;'
+            then:
+              # If not already marked as ready, mark it and start components
+              - if:
+                  condition:
+                    lambda: 'return !id(is_ready_to_run);'
+                  then:
+                    - logger.log: "Temperature reached. Starting dryer operation."
+                    - globals.set:
+                        id: is_ready_to_run
+                        value: 'true'
+                    # Turn on operational components
+                    - switch.turn_on: drying_fan
+                    - switch.turn_on: blender
+                    # Start conveyor motor (move indefinitely)
+                    # Set target far away; speed controlled by max_speed
+                    - stepper.set_target:
+                        id: conveyor_motor
+                        target: !lambda 'return id(conveyor_motor).current_position + 1000000;' # Large target
+            else:
+              # Conditions not met (too cold or finished)
+              - if:
+                  condition:
+                      # Only stop if it was previously running
+                      lambda: 'return id(is_ready_to_run);'
+                  then:
+                    - logger.log: "Temperature too low or process finished. Stopping operation."
+                    - globals.set: # Mark as not ready
+                        id: is_ready_to_run
+                        value: 'false'
+                    # Stop operational components (leave heat managed by its own logic)
+                    - switch.turn_off: drying_fan
+                    - switch.turn_off: blender
+                    - stepper.set_target: # Stop conveyor motor
+                        id: conveyor_motor
+                        target: !lambda 'return id(conveyor_motor).current_position;'
 
 switch:
   - platform: gpio
@@ -90,47 +169,70 @@ switch:
     restore_mode: ALWAYS_OFF
 
   - platform: gpio
+    # Pin used in ESPHome YAML (Arduino code used pin 2)
     pin: 22
     id: blender
     name: "Blender"
     restore_mode: ALWAYS_OFF
 
-  - platform: template
-    name: "Move Conveyor"
-    turn_on_action:
-      - stepper.set_target:
-          id: conveyor_motor
-          target: 1000
-
-
 stepper:
   - platform: a4988
     id: conveyor_motor
     step_pin: 26
+    # Note: Arduino code set DIR HIGH. A4988 platform handles direction
+    # based on target vs current position. Ensure target logic moves positively.
     dir_pin: 27
-    max_speed: "1 steps/s"
+    # Max speed set here. The 'conveyor_speed' number is for user input,
+    # but doesn't directly control this setting dynamically in this simple setup.
+    max_speed: "50 steps/s" # Corresponds to Arduino 60 RPM with 200 steps/rev
 
 number:
   - platform: template
-    name: "Target Weight"
+    name: "Target Weight (g)"
     id: target_weight
     optimistic: true
     min_value: 1
-    max_value: 10000000
+    max_value: 2000 # Adjust as needed
     step: 1
+    initial_value: 500 # Set a default
 
   - platform: template
-    name: "Drying Temperature"
+    name: "Target Drying Temp (°C)"
     id: drying_temp
     optimistic: true
-    min_value: 1
-    max_value: 100
+    min_value: 10
+    max_value: 300 # Sensible max for drying, adjust if needed
     step: 1
+    initial_value: 60 # Set a default
 
   - platform: template
-    name: "Conveyor Speed"
+    name: "Conveyor Speed (steps/s) (doesn't work)" # Changed unit for clarity with max_speed
     id: conveyor_speed
     optimistic: true
     min_value: 1
-    max_value: 100
-    step: 1
+    max_value: 200 # Match max_speed limit
+    step: 5
+    initial_value: 100 # Set a default
+    # NOTE: Changing this number doesn't dynamically change the actual motor
+    # speed in this configuration, as max_speed is static.
+    # It's more of an indicator or could be used in more complex logic/scripts.
+
+script:
+  - id: finish_sequence
+    mode: single # Ensure only one instance runs
+    then:
+      - delay: 5s # Wait 5 seconds like Arduino code
+      - logger.log: "Running final conveyor movement (200 steps)."
+      # Set the target 200 steps ahead of the current position
+      - stepper.set_target:
+          id: conveyor_motor
+          target: !lambda 'return id(conveyor_motor).current_position + 200;'
+      # Wait until the stepper reaches the target position
+      - wait_until:
+          # Use a lambda to check if current position equals target position
+          condition:
+            lambda: 'return id(conveyor_motor).current_position == id(conveyor_motor).target_position;'
+          timeout: 10s # Adjust timeout as needed based on motor speed/load
+      - logger.log: "Final movement complete. Restarting device."
+      - delay: 1s # Short delay before restarting
+      - logger.log: "Restarting device..."
