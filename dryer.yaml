@@ -58,43 +58,13 @@ sensor:
     dout_pin: 13
     clk_pin: 12
     gain: 128
-    update_interval: 1s # Update more frequently for averaging
+    update_interval: 5s # Update more frequently for averaging
     filters:
-      # Approximate Arduino's averageWeight calculation
-      - sliding_window_moving_average:
-          window_size: 40
-          send_every: 1 # Send average on every new reading
       - calibrate_linear:
           # Map raw ADC readings to grams (adjust these based on your calibration)
           # Example: 0g -> raw reading A, 1000g -> raw reading B
           - 35000 -> 0.0   # Example raw reading for 0 grams
           - 450000 -> 1000.0 # Example raw reading for 1000 grams
-    on_value:
-      then:
-        # Check finish condition
-        - if:
-            condition:
-              # Check weight AND that we haven't already finished
-              and:
-                - lambda: 'return id(load_cell).state > id(target_weight).state;'
-                - lambda: 'return !id(is_finished);'
-            then:
-              - logger.log: "Target weight reached. Finishing process."
-              - globals.set:
-                  id: is_finished
-                  value: 'true'
-              - globals.set: # Stop trying to run
-                  id: is_ready_to_run
-                  value: 'false'
-              # Stop all outputs immediately
-              - switch.turn_off: heat
-              - switch.turn_off: drying_fan
-              - switch.turn_off: blender
-              - stepper.set_target: # Stop conveyor motor
-                  id: conveyor_motor
-                  target: !lambda 'return id(conveyor_motor).current_position;'
-              # Execute the finish sequence script
-              - script.execute: finish_sequence
 
   - platform: dallas_temp
     # address: 0x???????????????? # Optional: specify sensor address if multiple sensors
@@ -184,7 +154,7 @@ stepper:
     dir_pin: 27
     # Max speed set here. The 'conveyor_speed' number is for user input,
     # but doesn't directly control this setting dynamically in this simple setup.
-    max_speed: "50 steps/s" # Corresponds to Arduino 60 RPM with 200 steps/rev
+    max_speed: "800 steps/s" # Corresponds to Arduino 60 RPM with 200 steps/rev
 
 number:
   - platform: template
@@ -205,18 +175,6 @@ number:
     step: 1
     initial_value: 60 # Set a default
 
-  - platform: template
-    name: "Conveyor Speed (steps/s) (doesn't work)" # Changed unit for clarity with max_speed
-    id: conveyor_speed
-    optimistic: true
-    min_value: 1
-    max_value: 200 # Match max_speed limit
-    step: 5
-    initial_value: 100 # Set a default
-    # NOTE: Changing this number doesn't dynamically change the actual motor
-    # speed in this configuration, as max_speed is static.
-    # It's more of an indicator or could be used in more complex logic/scripts.
-
 script:
   - id: finish_sequence
     mode: single # Ensure only one instance runs
@@ -235,4 +193,3 @@ script:
           timeout: 10s # Adjust timeout as needed based on motor speed/load
       - logger.log: "Final movement complete. Restarting device."
       - delay: 1s # Short delay before restarting
-      - logger.log: "Restarting device..."
