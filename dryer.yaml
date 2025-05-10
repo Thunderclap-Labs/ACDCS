@@ -65,6 +65,32 @@ sensor:
           # Example: 0g -> raw reading A, 1000g -> raw reading B
           - 35000 -> 0.0   # Example raw reading for 0 grams
           - 450000 -> 1000.0 # Example raw reading for 1000 grams
+    on_value:
+      then:
+        # Check finish condition
+        - if:
+            condition:
+              # Check weight AND that we haven't already finished
+              and:
+                - lambda: 'return id(load_cell).state > id(target_weight).state;'
+                - lambda: 'return !id(is_finished);'
+            then:
+              - logger.log: "Target weight reached. Finishing process."
+              - globals.set:
+                  id: is_finished
+                  value: 'true'
+              - globals.set: # Stop trying to run
+                  id: is_ready_to_run
+                  value: 'false'
+              # Stop all outputs immediately
+              - switch.turn_off: heat
+              - switch.turn_off: drying_fan
+              - switch.turn_off: blender
+              - stepper.set_target: # Stop conveyor motor
+                  id: conveyor_motor
+                  target: !lambda 'return id(conveyor_motor).current_position;'
+              # Execute the finish sequence script
+              - script.execute: finish_sequence
 
   - platform: dallas_temp
     # address: 0x???????????????? # Optional: specify sensor address if multiple sensors
